@@ -1,0 +1,21 @@
+# Merge this entry into the existing sinksConfig and add the sink name to the
+# selected playbooks' sinks lists so it receives their enriched findings.
+sinksConfig:
+  - webhook_sink:
+      name: telemost_example
+      default: false
+      url: http://robusta-telemost.monitoring.svc:8080/v1/findings/example-dev
+      format: json
+      size_limit: 3000000
+      authorization: "{{ env.TELEMOST_WEBHOOK_AUTHORIZATION }}"
+      scope:
+        include:
+          - labels: robusta=enabled,observability_profile=example-dev,namespace=example-dev
+
+runner:
+  additional_env_vars:
+    - name: TELEMOST_WEBHOOK_AUTHORIZATION
+      valueFrom:
+        secretKeyRef:
+          name: robusta-telemost-webhook
+          key: authorization

@@ -1,0 +1,50 @@
+{
+  "source": "PROMETHEUS",
+  "title": "HTTP 5xx ratio",
+  "severity": "LOW",
+  "description": "HTTP error budget exceeded",
+  "subject": {
+    "labels": {
+      "robusta": "enabled",
+      "cluster": "example"
+    },
+    "namespace": "example-dev"
+  },
+  "starts_at": "2026-01-02T03:00:00Z",
+  "fingerprint": "1234567890abcdef",
+  "links": [],
+  "enrichments": [
+    {
+      "blocks": [
+        {
+          "graph_data": {
+            "graph_name": "5xx ratio",
+            "data": {
+              "result_type": "matrix",
+              "series_list_result": [
+                {
+                  "metric": {},
+                  "timestamps": [
+                    1767322800,
+                    1767322860
+                  ],
+                  "values": [
+                    "1",
+                    "1"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "blocks": [
+        {
+          "text": "<https://logs.example.invalid/view|Deployment logs>"
+        }
+      ]
+    }
+  ]
+}
