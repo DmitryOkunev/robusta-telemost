@@ -1,6 +1,6 @@
 # Robusta Telemost
 
-A Go service for sending enriched Robusta Classic Prometheus alerts to Yandex Telemost. It consumes the stock JSON webhook sink. A firing alert opens a conversation with a caption, available PNG graphs and a reaction on the parent. A resolved alert posts in that thread and changes the parent's reaction.
+A Go service for sending enriched Robusta Classic Prometheus alerts to Yandex Telemost. It consumes the stock JSON webhook sink. A firing alert opens a conversation with a caption, available PNG graphs and a reaction on the parent. A resolved alert posts in that thread and edits the original caption to ✅ resolved and changes the parent's reaction.
 
 ## Connect Robusta
 
@@ -24,9 +24,9 @@ Use a dedicated Valkey user with key pattern `~telemost:*` and commands `+ping +
 
 The service accepts opted-in Prometheus findings with the label `robusta=enabled` and groups them by destination chat, source cluster label, fingerprint and normalized start time. A new occurrence of the same alert gets its own thread. Robusta 0.55.0 prefixes resolved titles with `[RESOLVED] `. Its `failure` flag can be true for both states.
 
-PNG graphs are rendered from the finite samples in Robusta's matrix enrichments. Text blocks carry log links from existing playbooks. Tenant selection stays with those playbooks. Findings with no plottable samples use a text message. The renderer currently draws time series in UTC. Robusta-specific axis formats, threshold overlays and non-graph file attachments are outside this first version.
+PNG graphs are rendered from the finite samples in Robusta's matrix enrichments. Text blocks carry log links from existing playbooks. Tenant selection stays with those playbooks. Findings with no plottable samples use a text message. The PNG uses a dark background, UTC time labels, a color legend and a marker at the last observed sample. Missing values break the line. Robusta-specific axis formats, threshold overlays and non-graph file attachments are outside this first version.
 
-The webhook responds with HTTP 204 after delivery or a recognized repeat. Reaction retries reuse the saved parent. An open thread stays in Valkey until resolution. Closed incidents are remembered for 30 days.
+The webhook responds with HTTP 204 after delivery or a recognized repeat. While an incident is open, Valkey stores the caption for resolution and the references to its original images. Editing the gallery reuses those references even if the resolved event has no graph. Retrying an edit or reaction reuses the parent without posting another reply. Incidents opened with v0.1.0 retain their original captions because their records contain only a message ID. An open thread stays in Valkey until resolution. Closed incidents are remembered for 30 days.
 
 If a post times out, or the process stops between claiming the post and saving its ID, the state remains pending. A replay receives HTTP 409 to prevent a second top-level post. An orphan resolution also receives 409. A bot rejection with an explicit 4xx error permits a replay. Robusta 0.55.0 logs failed webhook calls and has no durable retry queue. Replaying failed deliveries and reconciling uncertain posts currently require operator intervention.
 

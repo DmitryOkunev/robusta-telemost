@@ -21,8 +21,10 @@ else redis.call('SET', KEYS[1], ARGV[2]) end
 return 1`
 
 type state struct {
-	Phase  string
-	Parent int64
+	Phase           string
+	Parent          int64
+	ResolvedCaption string         `json:",omitempty"`
+	Images          []galleryImage `json:",omitempty"`
 }
 type service struct {
 	db                               redis.Cmdable
@@ -90,7 +92,7 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if !resolved {
 			return nil
 		}
-	case "root_sent", "reply_sent":
+	case "root_sent", "reply_sent", "parent_edited":
 	case "":
 		if resolved {
 			return errConflict
@@ -107,11 +109,12 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if resolved {
 			phase, after = "sending_reply", "reply_sent"
 		}
-		claim := state{phase, current.Parent}
+		claim := current
+		claim.Phase = phase
 		if err = s.swap(ctx, key, current, claim); err != nil {
 			return err
 		}
-		id, err := s.bot.publish(ctx, chat, f.message(), current.Parent, imgs)
+		response, err := s.bot.publish(ctx, chat, f.message(), current.Parent, imgs)
 		if err != nil {
 			var rejected rejection
 			if errors.As(err, &rejected) {
@@ -121,21 +124,38 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 			}
 			return err
 		}
-		posted := state{after, current.Parent}
+		posted := current
+		posted.Phase = after
 		if !resolved {
-			posted.Parent = id
+			posted.Parent = response.MessageID
+			posted.Images = response.Images
+			posted.ResolvedCaption = f.messageWithStatus(true)
 		}
 		if err = s.swap(ctx, key, claim, posted); err != nil {
 			return err
 		}
 		current = posted
 	}
+	// Version 0.1 stored only the parent ID. Preserve its existing gallery
+	// when the original attachment references are unavailable.
+	if current.Phase == "reply_sent" && current.ResolvedCaption != "" {
+		if err = s.bot.editParent(ctx, chat, current); err != nil {
+			return err
+		}
+		edited := state{Phase: "parent_edited", Parent: current.Parent}
+		if err = s.swap(ctx, key, current, edited); err != nil {
+			return err
+		}
+		current = edited
+	}
 	name, next := s.firingReaction, "open"
-	if current.Phase == "reply_sent" {
+	if current.Phase == "reply_sent" || current.Phase == "parent_edited" {
 		name, next = s.resolvedReaction, "closed"
 	}
 	if err = s.bot.react(ctx, chat, current.Parent, name); err != nil {
 		return err
 	}
-	return s.swap(ctx, key, current, state{next, current.Parent})
+	updated := current
+	updated.Phase = next
+	return s.swap(ctx, key, current, updated)
 }

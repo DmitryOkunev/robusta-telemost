@@ -24,36 +24,45 @@ type rejection struct{ status int }
 
 func (r rejection) Error() string { return fmt.Sprintf("bot rejected request (HTTP %d)", r.status) }
 
-func (b bot) call(ctx context.Context, method, contentType string, body io.Reader) (int64, error) {
+type galleryImage struct {
+	FileID string `json:"file_id"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+type botResponse struct {
+	OK        *bool          `json:"ok"`
+	MessageID int64          `json:"message_id"`
+	Images    []galleryImage `json:"images"`
+}
+
+func (b bot) call(ctx context.Context, method, contentType string, body io.Reader) (botResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", b.base+"/bot/v1/messages/"+method+"/", body)
 	if err != nil {
-		return 0, err
+		return botResponse{}, err
 	}
 	req.Header.Set("Authorization", "OAuth "+b.token)
 	req.Header.Set("Content-Type", contentType)
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return 0, err
+		return botResponse{}, err
 	}
 	defer resp.Body.Close()
-	var result struct {
-		OK        *bool
-		MessageID int64 `json:"message_id"`
-	}
+	var result botResponse
 	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 408 && err == nil && result.OK != nil && !*result.OK {
-		return 0, rejection{resp.StatusCode}
+		return botResponse{}, rejection{resp.StatusCode}
 	}
 	if err != nil || resp.StatusCode != 200 || result.OK == nil || !*result.OK {
-		return 0, fmt.Errorf("indeterminate bot response (HTTP %d)", resp.StatusCode)
+		return botResponse{}, fmt.Errorf("indeterminate bot response (HTTP %d)", resp.StatusCode)
 	}
 	if method != "sendReaction" && result.MessageID <= 0 {
-		return 0, errors.New("bot response missing message_id")
+		return botResponse{}, errors.New("bot response missing message_id")
 	}
-	return result.MessageID, nil
+	return result, nil
 }
 
-func (b bot) publish(ctx context.Context, chat, text string, thread int64, images [][]byte) (int64, error) {
+func (b bot) publish(ctx context.Context, chat, text string, thread int64, images [][]byte) (botResponse, error) {
 	if len(images) == 0 {
 		msg := map[string]any{"chat_id": chat, "text": text, "disable_notification": true, "disable_preview": true}
 		if thread != 0 {
@@ -61,7 +70,7 @@ func (b bot) publish(ctx context.Context, chat, text string, thread int64, image
 		}
 		data, err := json.Marshal(msg)
 		if err != nil {
-			return 0, err
+			return botResponse{}, err
 		}
 		return b.call(ctx, "sendText", "application/json", bytes.NewReader(data))
 	}
@@ -73,7 +82,7 @@ func (b bot) publish(ctx context.Context, chat, text string, thread int64, image
 	}
 	for k, v := range fields {
 		if err := w.WriteField(k, v); err != nil {
-			return 0, err
+			return botResponse{}, err
 		}
 	}
 	for i, img := range images {
@@ -82,16 +91,47 @@ func (b bot) publish(ctx context.Context, chat, text string, thread int64, image
 		h.Set("Content-Type", "image/png")
 		p, err := w.CreatePart(h)
 		if err != nil {
-			return 0, err
+			return botResponse{}, err
 		}
 		if _, err = p.Write(img); err != nil {
-			return 0, err
+			return botResponse{}, err
 		}
 	}
 	if err := w.Close(); err != nil {
-		return 0, err
+		return botResponse{}, err
 	}
-	return b.call(ctx, "sendGallery", w.FormDataContentType(), &buf)
+	response, err := b.call(ctx, "sendGallery", w.FormDataContentType(), &buf)
+	if err == nil && thread == 0 {
+		if len(response.Images) != len(images) {
+			return response, errors.New("bot response missing gallery images")
+		}
+		for _, img := range response.Images {
+			if img.FileID == "" || img.Width <= 0 || img.Height <= 0 {
+				return response, errors.New("bot returned incomplete gallery image")
+			}
+		}
+	}
+	return response, err
+}
+
+func (b bot) editParent(ctx context.Context, chat string, parent state) error {
+	msg := map[string]any{"chat_id": chat, "message_id": parent.Parent, "text": parent.ResolvedCaption, "disable_notification": true}
+	method := "sendText"
+	if len(parent.Images) > 0 {
+		method = "shareGallery"
+		msg["images"] = parent.Images
+	} else {
+		msg["disable_preview"] = true
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	response, err := b.call(ctx, method, "application/json", bytes.NewReader(data))
+	if err == nil && response.MessageID != parent.Parent {
+		return errors.New("bot returned a different message_id for parent edit")
+	}
+	return err
 }
 
 func (b bot) react(ctx context.Context, chat string, id int64, name string) error {

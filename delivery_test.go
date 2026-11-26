@@ -73,6 +73,7 @@ func TestThreadLifecycle(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 	failReaction := true
+	failEdit := true
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -98,6 +99,27 @@ func TestThreadLifecycle(t *testing.T) {
 				t.Error("caption lost link")
 			}
 			calls = append(calls, r.FormValue("chat_id")+":gallery:"+r.FormValue("thread_id"))
+			fmt.Fprintf(w, `{"ok":true,"message_id":%d,"images":[{"file_id":"original-file","width":1120,"height":480}]}`, parent)
+		case "/bot/v1/messages/shareGallery/":
+			var msg struct {
+				Chat   string `json:"chat_id"`
+				ID     int64  `json:"message_id"`
+				Text   string
+				Images []galleryImage
+			}
+			if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+				t.Error(err)
+				return
+			}
+			if msg.ID != parent || len(msg.Images) != 1 || msg.Images[0].FileID != "original-file" || !strings.HasPrefix(msg.Text, "✅ resolved") || !strings.Contains(msg.Text, "Deployment logs") {
+				t.Error("parent edit lost caption or original graph")
+			}
+			if failEdit {
+				failEdit = false
+				http.Error(w, `{"ok":false}`, 503)
+				return
+			}
+			calls = append(calls, msg.Chat+":edit")
 			fmt.Fprintf(w, `{"ok":true,"message_id":%d}`, parent)
 		case "/bot/v1/messages/sendReaction/":
 			var msg struct {
@@ -152,6 +174,10 @@ func TestThreadLifecycle(t *testing.T) {
 	}
 	resolved := f
 	resolved.Title = "[RESOLVED] " + f.Title
+	if got := post(second, "dev", resolved); got != 502 {
+		t.Fatal("edit failure", got)
+	}
+	second = newHandler()
 	for _, event := range []finding{resolved, resolved, f} {
 		if got := post(second, "dev", event); got != 204 {
 			t.Fatal("status", got)
@@ -160,7 +186,7 @@ func TestThreadLifecycle(t *testing.T) {
 	if got := post(second, "test", resolved); got != 204 {
 		t.Fatal("second channel", got)
 	}
-	want := "channel-a:gallery:,channel-a:fire,channel-b:gallery:,channel-b:fire,channel-a:gallery:" + strconv.FormatInt(parent, 10) + ",channel-a:like,channel-b:gallery:" + strconv.FormatInt(parent, 10) + ",channel-b:like"
+	want := "channel-a:gallery:,channel-a:fire,channel-b:gallery:,channel-b:fire,channel-a:gallery:" + strconv.FormatInt(parent, 10) + ",channel-a:edit,channel-a:like,channel-b:gallery:" + strconv.FormatInt(parent, 10) + ",channel-b:edit,channel-b:like"
 	if strings.Join(calls, ",") != want {
 		t.Fatalf("calls %v", calls)
 	}
@@ -222,5 +248,29 @@ func TestUncertainAndRejectedPosts(t *testing.T) {
 				t.Fatalf("definite retry: %v, calls %d", err, attempts.Load())
 			}
 		})
+	}
+}
+
+func TestEditTextParent(t *testing.T) {
+	const id = int64(12345)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg struct {
+			ID     int64 `json:"message_id"`
+			Thread int64 `json:"thread_id"`
+			Text   string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Error(err)
+			return
+		}
+		if r.URL.Path != "/bot/v1/messages/sendText/" || msg.ID != id || msg.Thread != 0 || msg.Text != "✅ resolved · test" {
+			t.Error("expected an in-place text edit")
+		}
+		fmt.Fprintf(w, `{"ok":true,"message_id":%d}`, id)
+	}))
+	defer api.Close()
+	b := bot{api.URL, "fixture", api.Client()}
+	if err := b.editParent(context.Background(), "chat", state{Parent: id, ResolvedCaption: "✅ resolved · test"}); err != nil {
+		t.Fatal(err)
 	}
 }

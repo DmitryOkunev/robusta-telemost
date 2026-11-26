@@ -1,16 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
-
-	chart "github.com/wcharczuk/go-chart/v2"
 )
 
 type finding struct {
@@ -31,7 +26,10 @@ type finding struct {
 }
 
 type graphData struct {
-	Name string `json:"graph_name"`
+	Name     string `json:"graph_name"`
+	Metadata struct {
+		Query string `json:"query"`
+	} `json:"metadata"`
 	Data struct {
 		Series []struct {
 			Metric     map[string]string
@@ -45,9 +43,11 @@ var robustaLink = regexp.MustCompile(`<(https?://[^|>\s]+)\|([^>]+)>`)
 
 func (f finding) resolved() bool { return strings.HasPrefix(f.Title, "[RESOLVED] ") }
 
-func (f finding) message() string {
+func (f finding) message() string { return f.messageWithStatus(f.resolved()) }
+
+func (f finding) messageWithStatus(resolved bool) string {
 	status := "🔥 firing"
-	if f.resolved() {
+	if resolved {
 		status = "✅ resolved"
 	}
 	lines := []string{fmt.Sprintf("%s · %s · **%s**", status, f.Severity, strings.TrimPrefix(f.Title, "[RESOLVED] "))}
@@ -86,7 +86,7 @@ func (f finding) graphs() ([][]byte, error) {
 			if len(result) >= 8 {
 				return nil, errors.New("too many graphs")
 			}
-			img, err := b.Graph.png()
+			img, err := b.Graph.png(strings.TrimPrefix(f.Title, "[RESOLVED] "))
 			if err != nil {
 				return nil, err
 			}
@@ -96,52 +96,4 @@ func (f finding) graphs() ([][]byte, error) {
 		}
 	}
 	return result, nil
-}
-
-func (g graphData) png() ([]byte, error) {
-	c := chart.Chart{Width: 1000, Height: 400, Title: g.Name, XAxis: chart.XAxis{ValueFormatter: func(v interface{}) string { return chart.TimeFromFloat64(v.(float64)).UTC().Format("15:04") }}}
-	minX, maxX := math.Inf(1), math.Inf(-1)
-	minY, maxY := math.Inf(1), math.Inf(-1)
-	for _, s := range g.Data.Series {
-		if len(s.Timestamps) != len(s.Values) {
-			return nil, errors.New("unaligned graph series")
-		}
-		var line chart.TimeSeries
-		line.Name = fmt.Sprint(s.Metric)
-		for i, raw := range s.Values {
-			y, err := strconv.ParseFloat(raw, 64)
-			if err != nil || math.IsInf(y, 0) || math.IsNaN(y) {
-				continue
-			}
-			sec, frac := math.Modf(s.Timestamps[i])
-			line.XValues = append(line.XValues, time.Unix(int64(sec), int64(frac*1e9)).UTC())
-			x := chart.TimeToFloat64(line.XValues[len(line.XValues)-1])
-			minX, maxX = math.Min(minX, x), math.Max(maxX, x)
-			minY, maxY = math.Min(minY, y), math.Max(maxY, y)
-			line.YValues = append(line.YValues, y)
-		}
-		if len(line.XValues) > 0 {
-			line.Style.DotWidth = 2
-			c.Series = append(c.Series, line)
-		}
-	}
-	if len(c.Series) == 0 {
-		return nil, nil
-	}
-	if minX == maxX {
-		pad := float64(time.Minute)
-		c.XAxis.Range = &chart.ContinuousRange{Min: minX - pad, Max: maxX + pad}
-	}
-	if minY == maxY {
-		pad := math.Max(math.Abs(minY)*0.05, 1e-6)
-		c.YAxis.Range = &chart.ContinuousRange{Min: minY - pad, Max: maxY + pad}
-	}
-	if len(c.Series) > 1 {
-		c.Elements = []chart.Renderable{chart.Legend(&c)}
-	}
-	var buf bytes.Buffer
-	if err := c.Render(chart.PNG, &buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
