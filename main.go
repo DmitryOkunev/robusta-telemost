@@ -95,6 +95,15 @@ func main() {
 			log.Fatal("invalid route or chat ID")
 		}
 	}
+	var projectLabels map[string]string
+	if err := json.Unmarshal([]byte(setting("TELEMOST_PROJECT_LABELS", "{}")), &projectLabels); err != nil || projectLabels == nil {
+		log.Fatal("TELEMOST_PROJECT_LABELS must be a JSON object mapping project names to display labels")
+	}
+	for project, label := range projectLabels {
+		if strings.TrimSpace(project) == "" || strings.TrimSpace(label) == "" || strings.ContainsAny(label, "\r\n") {
+			log.Fatal("invalid project name or display label in TELEMOST_PROJECT_LABELS")
+		}
+	}
 	db := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs:           strings.Split(required("VALKEY_ADDRS"), ","),
 		Username:        required("VALKEY_USERNAME"),
@@ -105,7 +114,8 @@ func main() {
 	})
 	defer db.Close()
 	s := &service{
-		db: db,
+		db:            db,
+		projectLabels: projectLabels,
 		bot: bot{
 			base:  "https://botapi.messenger.yandex.net",
 			token: required("YAMESSENGER_BOT_TOKEN"),

@@ -15,6 +15,7 @@ A Go service for sending enriched Robusta Classic Prometheus alerts to Yandex Te
 | `YAMESSENGER_BOT_TOKEN` | OAuth bot token. Only the Go service needs it. |
 | `VALKEY_ADDRS` | Comma-separated Valkey Cluster bootstrap addresses with ports. The service must also reach addresses announced by nodes. |
 | `VALKEY_USERNAME`, `VALKEY_PASSWORD` | ACL credentials for the service. The tested grant is shown below. |
+| `TELEMOST_PROJECT_LABELS` | Optional JSON map, e.g. `{"example-desk":"💼 Example Desk"}`. A finding with `observability_profile=example-desk-test` gets the prefix `💼 Example Desk TEST` on its firing and resolved messages. Unmapped profiles keep the standard heading. |
 | `FIRING_REACTION`, `RESOLVED_REACTION` | Names accepted by the chat, defaulting to `fire` and `like`. Check the chat's available reactions. |
 | `LISTEN_ADDR` | Defaults to `:8080`. Liveness is `GET /healthz` and Valkey readiness is `GET /readyz`. |
 

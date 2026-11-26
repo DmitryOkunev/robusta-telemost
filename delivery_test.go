@@ -43,7 +43,7 @@ func TestWebhookGraph(t *testing.T) {
 	if _, err := png.Decode(bytes.NewReader(images[0])); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(f.message(), "](https://") {
+	if !strings.Contains(f.message(false, nil), "](https://") {
 		t.Fatal("missing markdown link")
 	}
 }
@@ -98,6 +98,13 @@ func TestThreadLifecycle(t *testing.T) {
 			if !strings.Contains(r.FormValue("text"), "](https://") {
 				t.Error("caption lost link")
 			}
+			expected := "💼 Example Desk TEST · 🔥 firing"
+			if r.FormValue("thread_id") != "" {
+				expected = "💼 Example Desk TEST · ✅ resolved"
+			}
+			if !strings.HasPrefix(r.FormValue("text"), expected) {
+				t.Error("missing project heading or status")
+			}
 			calls = append(calls, r.FormValue("chat_id")+":gallery:"+r.FormValue("thread_id"))
 			fmt.Fprintf(w, `{"ok":true,"message_id":%d,"images":[{"file_id":"original-file","width":1120,"height":480}]}`, parent)
 		case "/bot/v1/messages/shareGallery/":
@@ -111,7 +118,7 @@ func TestThreadLifecycle(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			if msg.ID != parent || len(msg.Images) != 1 || msg.Images[0].FileID != "original-file" || !strings.HasPrefix(msg.Text, "✅ resolved") || !strings.Contains(msg.Text, "Deployment logs") {
+			if msg.ID != parent || len(msg.Images) != 1 || msg.Images[0].FileID != "original-file" || !strings.HasPrefix(msg.Text, "💼 Example Desk TEST · ✅ resolved") || !strings.Contains(msg.Text, "Deployment logs") {
 				t.Error("parent edit lost caption or original graph")
 			}
 			if failEdit {
@@ -150,9 +157,10 @@ func TestThreadLifecycle(t *testing.T) {
 	newHandler := func() http.Handler {
 		db := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{addr}, Protocol: 2, Username: os.Getenv("TEST_VALKEY_USER"), Password: os.Getenv("TEST_VALKEY_PASSWORD"), DisableIdentity: true})
 		t.Cleanup(func() { db.Close() })
-		return handler(&service{db: db, bot: bot{api.URL, "fixture", api.Client()}, firingReaction: "fire", resolvedReaction: "like"}, map[string]string{"dev": "channel-a", "test": "channel-b"}, "key")
+		return handler(&service{projectLabels: map[string]string{"example-desk": "💼 Example Desk"}, db: db, bot: bot{api.URL, "fixture", api.Client()}, firingReaction: "fire", resolvedReaction: "like"}, map[string]string{"dev": "channel-a", "test": "channel-b"}, "key")
 	}
 	f := sample(t)
+	f.Subject.Labels["observability_profile"] = "example-desk-test"
 	f.Fingerprint = fmt.Sprintf("integration-%d", time.Now().UnixNano())
 	post := func(h http.Handler, route string, f finding) int {
 		payload, _ := json.Marshal(f)
@@ -272,5 +280,14 @@ func TestEditTextParent(t *testing.T) {
 	b := bot{api.URL, "fixture", api.Client()}
 	if err := b.editParent(context.Background(), "chat", state{Parent: id, ResolvedCaption: "✅ resolved · test"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProjectHeading(t *testing.T) {
+	labels := map[string]string{"market": "🪙 Market", "example-desk": "💼 Example Desk"}
+	for profile, want := range map[string]string{"market-dev": "🪙 Market DEV", "example-desk-test": "💼 Example Desk TEST", "example-desk": "💼 Example Desk", "other-dev": "", "marketplace-dev": "", "market-": "", "": ""} {
+		if got := projectHeading(profile, labels); got != want {
+			t.Errorf("profile %q: got %q, want %q", profile, got, want)
+		}
 	}
 }

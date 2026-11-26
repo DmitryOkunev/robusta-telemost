@@ -27,6 +27,7 @@ type state struct {
 	Images          []galleryImage `json:",omitempty"`
 }
 type service struct {
+	projectLabels                    map[string]string
 	db                               redis.Cmdable
 	bot                              bot
 	firingReaction, resolvedReaction string
@@ -114,7 +115,7 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if err = s.swap(ctx, key, current, claim); err != nil {
 			return err
 		}
-		response, err := s.bot.publish(ctx, chat, f.message(), current.Parent, imgs)
+		response, err := s.bot.publish(ctx, chat, f.message(resolved, s.projectLabels), current.Parent, imgs)
 		if err != nil {
 			var rejected rejection
 			if errors.As(err, &rejected) {
@@ -129,7 +130,7 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if !resolved {
 			posted.Parent = response.MessageID
 			posted.Images = response.Images
-			posted.ResolvedCaption = f.messageWithStatus(true)
+			posted.ResolvedCaption = f.message(true, s.projectLabels)
 		}
 		if err = s.swap(ctx, key, claim, posted); err != nil {
 			return err

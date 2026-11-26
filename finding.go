@@ -43,12 +43,29 @@ var robustaLink = regexp.MustCompile(`<(https?://[^|>\s]+)\|([^>]+)>`)
 
 func (f finding) resolved() bool { return strings.HasPrefix(f.Title, "[RESOLVED] ") }
 
-func (f finding) message() string { return f.messageWithStatus(f.resolved()) }
+// Profiles use <project>-<environment>; project names may contain hyphens.
+func projectHeading(profile string, labels map[string]string) string {
+	if label := labels[profile]; label != "" {
+		return label
+	}
+	split := strings.LastIndexByte(profile, '-')
+	if split <= 0 || split == len(profile)-1 {
+		return ""
+	}
+	label := labels[profile[:split]]
+	if label == "" {
+		return ""
+	}
+	return label + " " + strings.ToUpper(profile[split+1:])
+}
 
-func (f finding) messageWithStatus(resolved bool) string {
+func (f finding) message(resolved bool, labels map[string]string) string {
 	status := "🔥 firing"
 	if resolved {
 		status = "✅ resolved"
+	}
+	if project := projectHeading(f.Subject.Labels["observability_profile"], labels); project != "" {
+		status = project + " · " + status
 	}
 	lines := []string{fmt.Sprintf("%s · %s · **%s**", status, f.Severity, strings.TrimPrefix(f.Title, "[RESOLVED] "))}
 	if f.Subject.Namespace != "" {
