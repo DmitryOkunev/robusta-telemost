@@ -68,7 +68,7 @@ func incidentID(chat string, f finding) [32]byte {
 	return sha256.Sum256(data)
 }
 
-func (s *service) deliver(ctx context.Context, chat, route string, f finding) error {
+func (s *service) deliver(ctx context.Context, chat, route string, f finding, received time.Time) error {
 	digest := incidentID(chat, f)
 	lock := &s.locks[digest[0]]
 	lock.Lock()
@@ -135,7 +135,7 @@ func (s *service) deliver(ctx context.Context, chat, route string, f finding) er
 		posted := current
 		posted.Phase = after
 		posted.PublishedMillis = time.Now().UnixMilli()
-		observeDelay("webhook_to_publish", resolved, receipt(ctx))
+		observeDelay("webhook_to_publish", resolved, received)
 		if resolved && posted.ResolvedCaption != "" {
 			posted.ResolvedCaption = withSummary(posted.ResolvedCaption, details)
 		}

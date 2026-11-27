@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"time"
@@ -14,8 +13,6 @@ var deliveryDelay = promauto.NewHistogramVec(prometheus.HistogramOpts{
 var apiCalls = promauto.NewCounterVec(prometheus.CounterOpts{Name: "telemost_bot_api_requests_total", Help: "Bot API calls by method and result."}, []string{"method", "result"})
 var summaryReads = promauto.NewCounterVec(prometheus.CounterOpts{Name: "telemost_summary_reads_total", Help: "Incident metric lookups by result."}, []string{"result"})
 
-type receiptKey struct{}
-
 func observeDelay(stage string, resolved bool, start time.Time) {
 	if start.IsZero() {
 		return
@@ -26,4 +23,3 @@ func observeDelay(stage string, resolved bool, start time.Time) {
 	}
 	deliveryDelay.WithLabelValues(stage, event).Observe(max(0, time.Since(start).Seconds()))
 }
-func receipt(ctx context.Context) time.Time { t, _ := ctx.Value(receiptKey{}).(time.Time); return t }

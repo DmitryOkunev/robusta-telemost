@@ -101,6 +101,9 @@ func TestThreadLifecycle(t *testing.T) {
 			expected := "💼 Example Desk TEST · 🔥 firing"
 			if r.FormValue("thread_id") != "" {
 				expected = "💼 Example Desk TEST · ✅ resolved"
+				if !strings.Contains(r.FormValue("text"), "Длительность: 17 мин 0 с") {
+					t.Error("missing thread summary")
+				}
 			}
 			if !strings.HasPrefix(r.FormValue("text"), expected) {
 				t.Error("missing project heading or status")
@@ -120,6 +123,9 @@ func TestThreadLifecycle(t *testing.T) {
 			}
 			if msg.ID != parent || len(msg.Images) != 1 || msg.Images[0].FileID != "original-file" || !strings.HasPrefix(msg.Text, "💼 Example Desk TEST · ✅ resolved") || !strings.Contains(msg.Text, "Deployment logs") {
 				t.Error("parent edit lost caption or original graph")
+			}
+			if !strings.Contains(msg.Text, "Длительность: 17 мин 0 с") {
+				t.Error("missing parent summary")
 			}
 			if failEdit {
 				failEdit = false
@@ -181,6 +187,7 @@ func TestThreadLifecycle(t *testing.T) {
 		}
 	}
 	resolved := f
+	resolved.EndsAt = f.StartsAt.Add(17 * time.Minute)
 	resolved.Title = "[RESOLVED] " + f.Title
 	if got := post(second, "dev", resolved); got != 502 {
 		t.Fatal("edit failure", got)
@@ -197,6 +204,13 @@ func TestThreadLifecycle(t *testing.T) {
 	want := "channel-a:gallery:,channel-a:fire,channel-b:gallery:,channel-b:fire,channel-a:gallery:" + strconv.FormatInt(parent, 10) + ",channel-a:edit,channel-a:like,channel-b:gallery:" + strconv.FormatInt(parent, 10) + ",channel-b:edit,channel-b:like"
 	if strings.Join(calls, ",") != want {
 		t.Fatalf("calls %v", calls)
+	}
+	w := httptest.NewRecorder()
+	second.ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+	for _, fragment := range []string{`telemost_delivery_stage_seconds_count{event="firing",stage="webhook_to_publish"}`, `telemost_delivery_stage_seconds_count{event="resolved",stage="publish_to_reaction"}`, `telemost_bot_api_requests_total{method="sendReaction",result="5xx"}`} {
+		if !strings.Contains(w.Body.String(), fragment) {
+			t.Error("missing metric", fragment)
+		}
 	}
 }
 
@@ -241,13 +255,13 @@ func TestUncertainAndRejectedPosts(t *testing.T) {
 			f.Fingerprint = fmt.Sprint(time.Now().UnixNano())
 			orphan := f
 			orphan.Title = "[RESOLVED] " + f.Title
-			if err := s.deliver(context.Background(), "chat", "dev", orphan); !errors.Is(err, errConflict) {
+			if err := s.deliver(context.Background(), "chat", "dev", orphan, time.Now()); !errors.Is(err, errConflict) {
 				t.Fatalf("orphan: %v", err)
 			}
-			if err := s.deliver(context.Background(), "chat", "dev", f); err == nil {
+			if err := s.deliver(context.Background(), "chat", "dev", f, time.Now()); err == nil {
 				t.Fatal("expected bot error")
 			}
-			err := s.deliver(context.Background(), "chat", "dev", f)
+			err := s.deliver(context.Background(), "chat", "dev", f, time.Now())
 			if ambiguous {
 				if !errors.Is(err, errConflict) || attempts.Load() != 1 {
 					t.Fatalf("ambiguous retry: %v, calls %d", err, attempts.Load())

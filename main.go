@@ -49,7 +49,7 @@ func handler(s *service, routes map[string]string, token string) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 		defer cancel()
-		if err := s.deliver(context.WithValue(ctx, receiptKey{}, received), chat, r.PathValue("route"), f); err != nil {
+		if err := s.deliver(ctx, chat, r.PathValue("route"), f, received); err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, errConflict) {
 				status = http.StatusConflict
