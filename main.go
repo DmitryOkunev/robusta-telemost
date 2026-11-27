@@ -127,7 +127,11 @@ func main() {
 	if err := summary.validate(routes); err != nil {
 		log.Fatal(err)
 	}
-	s := &service{zone: zone, summary: summary,
+	holmes, err := newHolmes(setting("HOLMES_CONFIG", "{}"), summary)
+	if err != nil {
+		log.Fatalf("invalid HOLMES_CONFIG: %v", err)
+	}
+	s := &service{holmes: holmes, zone: zone, summary: summary,
 		db:            db,
 		projectLabels: projectLabels,
 		bot: bot{
@@ -151,6 +155,9 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if holmes != nil {
+		go s.runInvestigations(ctx)
+	}
 	done := make(chan struct{})
 	go func() {
 		<-ctx.Done()

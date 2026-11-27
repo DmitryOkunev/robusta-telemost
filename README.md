@@ -57,3 +57,15 @@ docker build -t robusta-telemost:dev .
 The integration script starts a disposable Valkey Cluster and uses a local HTTP server for the Telemost API. Tests cover gallery and text requests, per-channel state, a fresh service instance reading the same Valkey, duplicate deliveries, partial failures and ambiguous responses. The examples contain synthetic destinations.
 
 [Robusta webhook documentation](https://docs.robusta.dev/master/configuration/sinks/webhook.html) · [Telemost galleries](https://yandex.ru/dev/messenger/doc/ru/api-requests/message-send-gallery) · [Telemost reactions](https://yandex.ru/dev/messenger/doc/ru/api-requests/message-send-reaction)
+
+## Optional HolmesGPT thread analysis
+
+After a new firing card and its reaction are confirmed, the service can ask a standalone HolmesGPT `POST /api/chat` for a short analysis and post it in that thread. The model and provider credentials belong to Holmes. Set `HOLMES_CONFIG` to enable this feature, for example:
+
+```json
+{"enabled":true,"endpoint":"http://holmes","profiles":{"example-dev":{"url":"http://vlselect:9471","accountID":"1","projectID":"0"}}}
+```
+
+Only profiles and signals also registered in `INCIDENT_METRICS` qualify. The route, cluster and namespace must match. The payload contains selected object labels, times, numeric summaries of the configured graph series and threshold, and 15-minute VictoriaLogs counts (total, warning, error). Logs are scoped to the container or pod when present, otherwise to the namespace. Raw messages, dashboard links, annotations and credentials are excluded. A failed log lookup leaves the counts unavailable.
+
+Analysis is best effort. One background worker processes up to eight waiting jobs. A restart loses outstanding analysis jobs; ordinary alert and resolution delivery keep their existing Valkey semantics. The worker checks incident state before querying Holmes and again before posting. Check `telemost_holmes_investigations_total` for queue overflow, lookup failures and delivery outcomes. An empty configuration or `{"enabled":false}` disables analysis.
