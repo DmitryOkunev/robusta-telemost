@@ -91,7 +91,7 @@ func TestHolmesThread(t *testing.T) {
 		Metrics: metricsSource{URL: backend.URL + "/select/9/prometheus"},
 		Logs:    logSource{URL: backend.URL, AccountID: "1", ProjectID: "0"},
 	}}
-	h, err := newHolmes(fmt.Sprintf(`{"enabled":true,"endpoint":%q}`, backend.URL), cfg, sources)
+	h, err := newHolmes(holmesConfig{Enabled: true, Endpoint: backend.URL}, cfg, sources)
 	if err != nil {
 		t.Fatal(err)
 	}

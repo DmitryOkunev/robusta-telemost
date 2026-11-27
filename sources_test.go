@@ -75,7 +75,7 @@ func TestProjectSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	var summary summarySettings
-	sources, err := loadSources(file, &summary)
+	sources, err := loadSources(file, nil, &summary)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,49 @@ func TestProjectSources(t *testing.T) {
 		}
 	}
 	t.Setenv("TEST_METRIC_TOKEN", "")
-	if _, err := loadSources(file, &summarySettings{}); err == nil {
+	if _, err := loadSources(file, nil, &summarySettings{}); err == nil {
 		t.Fatal("missing credential accepted")
+	}
+}
+
+func TestSharedSourceGroup(t *testing.T) {
+	cfg, err := parseHolmes(`enabled: true
+endpoint: http://holmes
+contextLabels: [service]
+sources:
+  - route: dev
+    cluster: one
+    namespaces: [alpha, beta]
+    metrics: {url: "http://metrics/select/10/prometheus"}
+    logs: {url: "http://logs", accountID: "1", projectID: "0", auth: {bearerTokenEnv: LOG_TOKEN}}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOG_TOKEN", "fixture")
+	var summary summarySettings
+	profiles, err := loadSources("", cfg.Sources, &summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = summary.validate(map[string]string{"dev": "channel"}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := newHolmes(cfg, summary, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 2 || len(h.config.ContextLabels) != 1 {
+		t.Fatal("incorrect configuration")
+	}
+	for _, ns := range []string{"alpha", "beta"} {
+		p := profiles[ns]
+		if p.Namespace != ns || p.Route != "dev" || p.Cluster != "one" || summary.Profiles[ns].URL != p.Metrics.URL || h.config.Profiles[ns].Auth.BearerTokenEnv != "LOG_TOKEN" {
+			t.Fatal("incorrect profile", ns)
+		}
+	}
+	cfg.Sources[0].Namespaces = append(cfg.Sources[0].Namespaces, "alpha")
+	if _, err = loadSources("", cfg.Sources, &summarySettings{}); err == nil {
+		t.Fatal("duplicate accepted")
 	}
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"go.yaml.in/yaml/v2"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -27,13 +29,14 @@ type logSource struct {
 	URL       string
 	AccountID string     `yaml:"accountID"`
 	ProjectID string     `yaml:"projectID"`
-	Auth      sourceAuth `json:"-"`
+	Auth      sourceAuth `json:"auth,omitempty"`
 }
 type holmesConfig struct {
 	Enabled       bool
 	Endpoint      string
 	Profiles      map[string]logSource
-	ContextLabels []string
+	ContextLabels []string `yaml:"contextLabels"`
+	Sources       []sourceGroup
 }
 type holmesWorker struct {
 	config holmesConfig
@@ -72,11 +75,19 @@ func httpEndpoint(raw string) bool {
 	u, e := url.Parse(raw)
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
-func newHolmes(raw string, summary summarySettings, sources map[string]projectSource) (*holmesWorker, error) {
-	var c holmesConfig
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return nil, err
+func parseHolmes(raw string) (holmesConfig, error) {
+	var cfg holmesConfig
+	data := []byte(raw)
+	// Keep the case-insensitive keys accepted by the original JSON configuration.
+	if json.Valid(data) {
+		err := json.Unmarshal(data, &cfg)
+		return cfg, err
 	}
+	err := yaml.UnmarshalStrict(data, &cfg)
+	return cfg, err
+}
+
+func newHolmes(c holmesConfig, summary summarySettings, sources map[string]projectSource) (*holmesWorker, error) {
 	if !c.Enabled {
 		return nil, nil
 	}
@@ -86,6 +97,9 @@ func newHolmes(raw string, summary summarySettings, sources map[string]projectSo
 	for key, p := range c.Profiles {
 		if _, ok := summary.Profiles[key]; !ok || !httpEndpoint(p.URL) {
 			return nil, fmt.Errorf("invalid Holmes profile %q", key)
+		}
+		if err := p.Auth.validate(); err != nil {
+			return nil, fmt.Errorf("Holmes profile %q: %w", key, err)
 		}
 		for _, id := range []string{p.AccountID, p.ProjectID} {
 			if _, err := strconv.ParseUint(id, 10, 32); err != nil {
