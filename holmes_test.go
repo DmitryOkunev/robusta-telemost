@@ -22,6 +22,8 @@ func TestHolmesThread(t *testing.T) {
 	db := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{addr}, Username: os.Getenv("TEST_VALKEY_USER"), Password: os.Getenv("TEST_VALKEY_PASSWORD"), Protocol: 2, DisableIdentity: true})
 	defer db.Close()
 	started := make(chan struct{})
+	var gateway http.Handler
+	var accessKey string
 	release := make(chan struct{})
 	posted := make(chan int64, 2)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +33,20 @@ func TestHolmesThread(t *testing.T) {
 				t.Error("incorrect tenant or scope", q)
 			}
 			fmt.Fprint(w, `{"total":"20","errors":"2","warnings":"1"}`)
+		case "/select/9/prometheus/api/v1/query_range":
+			if r.FormValue("extra_filters[]") != `{cluster="one",namespace="sample-dev"}` || r.FormValue("query") != "up" {
+				t.Error("incorrect metric scope")
+			}
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"matrix","result":[]}}`)
 		case "/api/chat":
+			accessKey = r.Header.Get("X-Holmes-Query-Key")
+			query := httptest.NewRequest("POST", "/v1/observability/metrics", strings.NewReader(`{"query":"up"}`))
+			query.Header.Set("X-Holmes-Query-Key", accessKey)
+			rec := httptest.NewRecorder()
+			gateway.ServeHTTP(rec, query)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "matrix") {
+				t.Error("query not routed", rec.Code, rec.Body.String())
+			}
 			if r.Header.Get("X-Holmes-Namespace") != "sample-dev" {
 				t.Error("missing investigation namespace")
 			}
@@ -71,11 +86,17 @@ func TestHolmesThread(t *testing.T) {
 	}))
 	defer backend.Close()
 	cfg := summarySettings{Profiles: map[string]summaryProfile{"sample-dev": {Cluster: "one", Namespace: "sample-dev", Route: "dev"}}, Signals: map[string]signalSpec{"CPU": {Series: "CPU", Worst: "max"}}}
-	h, err := newHolmes(fmt.Sprintf(`{"enabled":true,"endpoint":%q,"profiles":{"sample-dev":{"url":%q,"accountID":"1","projectID":"0"}}}`, backend.URL, backend.URL), cfg)
+	sources := map[string]projectSource{"sample-dev": {
+		Cluster: "one", Namespace: "sample-dev", Route: "dev",
+		Metrics: metricsSource{URL: backend.URL + "/select/9/prometheus"},
+		Logs:    logSource{URL: backend.URL, AccountID: "1", ProjectID: "0"},
+	}}
+	h, err := newHolmes(fmt.Sprintf(`{"enabled":true,"endpoint":%q}`, backend.URL), cfg, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := service{holmes: h, summary: cfg, db: db, bot: bot{backend.URL, "x", backend.Client()}}
+	s := service{holmes: h, sources: sources, summary: cfg, db: db, bot: bot{backend.URL, "x", backend.Client()}}
+	gateway = handler(&s, map[string]string{"dev": "chat"}, "fixture")
 	f := sample(t)
 	f.Fingerprint = fmt.Sprint(time.Now().UnixNano())
 	f.Description = "CPU is high"

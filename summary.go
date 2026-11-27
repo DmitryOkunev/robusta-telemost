@@ -17,6 +17,7 @@ import (
 
 type summaryProfile struct {
 	Namespace, Cluster, Route, URL string
+	Auth                           sourceAuth `json:"-"`
 }
 type signalSpec struct{ Series, Worst string }
 type summarySettings struct {
@@ -122,6 +123,7 @@ func readSignal(ctx context.Context, p summaryProfile, spec signalSpec, f findin
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	p.Auth.apply(req)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {

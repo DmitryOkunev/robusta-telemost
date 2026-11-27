@@ -60,6 +60,9 @@ func handler(s *service, routes map[string]string, token string) http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+	if s.holmes != nil && len(s.sources) > 0 {
+		mux.HandleFunc("POST /v1/observability/{operation}", s.queryObservability)
+	}
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -124,14 +127,18 @@ func main() {
 	if err := json.Unmarshal([]byte(setting("INCIDENT_METRICS", "{}")), &summary); err != nil {
 		log.Fatal("invalid INCIDENT_METRICS JSON")
 	}
+	sources, err := loadSources(os.Getenv("OBSERVABILITY_PROFILES_FILE"), &summary)
+	if err != nil {
+		log.Fatalf("invalid observability sources: %v", err)
+	}
 	if err := summary.validate(routes); err != nil {
 		log.Fatal(err)
 	}
-	holmes, err := newHolmes(setting("HOLMES_CONFIG", "{}"), summary)
+	holmes, err := newHolmes(setting("HOLMES_CONFIG", "{}"), summary, sources)
 	if err != nil {
 		log.Fatalf("invalid HOLMES_CONFIG: %v", err)
 	}
-	s := &service{holmes: holmes, zone: zone, summary: summary,
+	s := &service{sources: sources, holmes: holmes, zone: zone, summary: summary,
 		db:            db,
 		projectLabels: projectLabels,
 		bot: bot{
