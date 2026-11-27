@@ -60,14 +60,28 @@ The integration script starts a disposable Valkey Cluster and uses a local HTTP 
 
 ## Optional HolmesGPT thread analysis
 
-After a new firing card and its reaction are confirmed, the service can ask a standalone HolmesGPT `POST /api/chat` for a short analysis and post it in that thread. The model and provider credentials belong to Holmes. Set `HOLMES_CONFIG` to enable this feature, for example:
+After a new firing card and its reaction are confirmed, the service can ask a standalone HolmesGPT `POST /api/chat` for a short analysis and post it in that thread. The model and provider credentials belong to Holmes. Enable the worker with `HOLMES_CONFIG={"enabled":true,"endpoint":"http://holmes","contextLabels":["service","deployment","reason"]}`. Mount a YAML file and set `OBSERVABILITY_PROFILES_FILE` to its full path. Its keys match the alert label `observability_profile`.
 
-```json
-{"enabled":true,"endpoint":"http://holmes","contextLabels":["service","deployment","reason"],"profiles":{"example-dev":{"url":"http://vlselect:9471","accountID":"1","projectID":"0"}}}
+```yaml
+profiles:
+  example-dev:
+    route: dev
+    cluster: sandbox
+    namespace: example-dev
+    metrics:
+      url: https://metrics.example.invalid/select/10/prometheus
+      auth: {bearerTokenEnv: EXAMPLE_METRICS_TOKEN}
+    logs:
+      url: https://logs.example.invalid
+      accountID: "1"
+      projectID: "0"
+      auth: {usernameEnv: EXAMPLE_LOG_USER, passwordEnv: EXAMPLE_LOG_PASSWORD}
 ```
 
-Every routed firing alert in a configured profile qualifies, including alerts without a graph. The route, cluster and namespace must match the profile in `INCIDENT_METRICS`. The payload includes bounded title and description from the finding, severity, times and selected object labels. Use `contextLabels` to include additional alert and series dimensions. Available graphs contribute up to eight visible matching series with minimum, maximum and last values; configured percentage signals retain their measurement and threshold. The payload also includes 15-minute VictoriaLogs counts (total, warning, error). Logs are scoped to the container or pod when present, otherwise to the namespace. The service omits raw log messages, other annotations and unlisted labels; it replaces HTTP URLs in alert text with a placeholder. Alert authors should keep descriptions and selected label values suitable for the model provider. A failed log lookup leaves the counts unavailable.
+Both sources support optional Bearer or Basic authentication. Populate the named environment variables from Secret keys. Omit `auth` for an internal endpoint without credentials. The two log IDs can be omitted together for a single-tenant or upstream-authenticated endpoint. Keep signal definitions in `INCIDENT_METRICS.signals`. Existing deployments can continue using their inline profiles for counts and summaries.
 
-The Holmes request includes `X-Holmes-Namespace` and `X-Holmes-Observed` (UTC RFC3339). Scoped Holmes tools can use these values to query the alert namespace and time window. Data returned by those tools can enter the model context.
+Every routed firing alert in a configured profile qualifies, including alerts without a graph. The route, cluster and namespace must match. The payload includes bounded title and description from the finding, severity, times and selected object labels. Use `contextLabels` to include additional alert and series dimensions. Available graphs contribute up to eight visible matching series with minimum, maximum and last values; configured percentage signals retain their measurement and threshold. The payload also includes 15-minute VictoriaLogs counts (total, warning, error). Logs are scoped to the container or pod when present, otherwise to the namespace. The service omits raw log messages, other annotations and unlisted labels; it replaces HTTP URLs in alert text with a placeholder. Alert authors should keep descriptions and selected label values suitable for the model provider. A failed log lookup leaves the counts unavailable.
+
+For interactive investigation, configure the native Holmes HTTP toolset with the sink host, method `POST`, and paths `/v1/observability/logs`, `/v1/observability/names`, and `/v1/observability/metrics`. Set its `config.extra_headers.X-Holmes-Query-Key` to `{{ request_context.headers['X-Holmes-Query-Key'] }}`. Each operation accepts a JSON object with a single `query` string for a LogsQL row filter, metric selector or MetricsQL expression respectively. The service issues a short-lived key for each investigation, selects the configured sources, and adds cluster and namespace filters on the backend. Raw log excerpts and metric results returned by these tools enter the model context.
 
 Analysis is best effort. One background worker processes up to 128 waiting jobs. A restart loses outstanding analysis jobs; ordinary alert and resolution delivery keep their existing Valkey semantics. The worker checks incident state before querying Holmes and again before posting. Check `telemost_holmes_investigations_total` for queue overflow, lookup failures and delivery outcomes. An empty configuration or `{"enabled":false}` disables analysis.

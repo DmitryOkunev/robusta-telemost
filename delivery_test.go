@@ -49,7 +49,7 @@ func TestWebhookGraph(t *testing.T) {
 }
 
 func TestRejectUnroutedFinding(t *testing.T) {
-	h := handler(nil, map[string]string{"dev": "chat-a"}, "test")
+	h := handler(&service{}, map[string]string{"dev": "chat-a"}, "test")
 	for _, tc := range []struct {
 		path, key string
 		code      int

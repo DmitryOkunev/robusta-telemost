@@ -28,6 +28,7 @@ type state struct {
 	PublishedMillis int64          `json:",omitempty"`
 }
 type service struct {
+	sources                          map[string]projectSource
 	holmes                           *holmesWorker
 	summary                          summarySettings
 	zone                             *time.Location

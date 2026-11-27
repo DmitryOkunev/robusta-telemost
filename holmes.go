@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,12 @@ import (
 
 var investigations = promauto.NewCounterVec(prometheus.CounterOpts{Name: "telemost_holmes_investigations_total", Help: "Optional investigation jobs by outcome."}, []string{"result"})
 
-type logSource struct{ URL, AccountID, ProjectID string }
+type logSource struct {
+	URL       string
+	AccountID string     `yaml:"accountID"`
+	ProjectID string     `yaml:"projectID"`
+	Auth      sourceAuth `json:"-"`
+}
 type holmesConfig struct {
 	Enabled       bool
 	Endpoint      string
@@ -55,6 +61,7 @@ type logCounts struct {
 	WindowMinutes, Total, Warnings, Errors int
 }
 type investigation struct {
+	profile   string
 	key, chat string
 	parent    int64
 	source    logSource
@@ -65,7 +72,7 @@ func httpEndpoint(raw string) bool {
 	u, e := url.Parse(raw)
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
-func newHolmes(raw string, summary summarySettings) (*holmesWorker, error) {
+func newHolmes(raw string, summary summarySettings, sources map[string]projectSource) (*holmesWorker, error) {
 	var c holmesConfig
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		return nil, err
@@ -73,7 +80,7 @@ func newHolmes(raw string, summary summarySettings) (*holmesWorker, error) {
 	if !c.Enabled {
 		return nil, nil
 	}
-	if !httpEndpoint(c.Endpoint) || len(c.Profiles) == 0 {
+	if !httpEndpoint(c.Endpoint) || len(c.Profiles)+len(sources) == 0 {
 		return nil, errors.New("invalid Holmes endpoint or missing profiles")
 	}
 	for key, p := range c.Profiles {
@@ -85,6 +92,15 @@ func newHolmes(raw string, summary summarySettings) (*holmesWorker, error) {
 				return nil, fmt.Errorf("invalid log tenant in %q", key)
 			}
 		}
+	}
+	if c.Profiles == nil {
+		c.Profiles = make(map[string]logSource)
+	}
+	for name, p := range sources {
+		if _, ok := c.Profiles[name]; ok {
+			return nil, fmt.Errorf("duplicate Holmes profile %q", name)
+		}
+		c.Profiles[name] = p.Logs
 	}
 	return &holmesWorker{config: c, jobs: make(chan investigation, 128), client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
@@ -194,7 +210,7 @@ func (s *service) queueInvestigation(key, chat, route string, parent int64, f fi
 		Labels: contextLabels(l, h.config.ContextLabels), Started: f.StartsAt.UTC(), Observed: received.UTC(), Graphs: graphs, GraphsTruncated: truncated,
 	}
 	select {
-	case h.jobs <- investigation{key, chat, parent, logs, ev}:
+	case h.jobs <- investigation{profile: profile, key: key, chat: chat, parent: parent, source: logs, evidence: ev}:
 		investigations.WithLabelValues("queued").Inc()
 	default:
 		investigations.WithLabelValues("queue_full").Inc()
@@ -222,8 +238,7 @@ func (h *holmesWorker) logs(ctx context.Context, j investigation) (*logCounts, e
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("AccountID", j.source.AccountID)
-	req.Header.Set("ProjectID", j.source.ProjectID)
+	j.source.apply(req)
 	var row struct{ Total, Errors, Warnings json.Number }
 	if err = h.request(req, &row); err != nil {
 		return nil, err
@@ -249,7 +264,7 @@ func (h *holmesWorker) request(req *http.Request, result any) error {
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(result)
 }
-func (h *holmesWorker) analyze(ctx context.Context, ev incidentEvidence) (string, error) {
+func (h *holmesWorker) analyze(ctx context.Context, ev incidentEvidence, queryKey string) (string, error) {
 	facts, err := json.Marshal(ev)
 	if err != nil {
 		return "", err
@@ -261,6 +276,9 @@ func (h *holmesWorker) analyze(ctx context.Context, ev incidentEvidence) (string
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if queryKey != "" {
+		req.Header.Set("X-Holmes-Query-Key", queryKey)
+	}
 	req.Header.Set("X-Holmes-Namespace", ev.Namespace)
 	req.Header.Set("X-Holmes-Observed", ev.Observed.UTC().Format(time.RFC3339))
 	var out struct{ Analysis string }
@@ -308,7 +326,24 @@ func (s *service) investigate(ctx context.Context, j investigation) (string, err
 	} else {
 		j.evidence.Logs = counts
 	}
-	text, err := s.holmes.analyze(ctx, j.evidence)
+	var queryKey string
+	if _, enabled := s.sources[j.profile]; enabled {
+		queryKey = rand.Text()
+		scope := queryScope{Profile: j.profile, Namespace: j.evidence.Namespace, Cluster: j.evidence.Cluster, Route: s.sources[j.profile].Route, Observed: j.evidence.Observed}
+		value, err := json.Marshal(scope)
+		if err != nil {
+			return "analysis_error", err
+		}
+		if err = s.db.Set(ctx, "telemost:holmes:"+queryKey, value, 2*time.Minute).Err(); err != nil {
+			return "analysis_error", err
+		}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			s.db.Del(cleanup, "telemost:holmes:"+queryKey)
+		}()
+	}
+	text, err := s.holmes.analyze(ctx, j.evidence, queryKey)
 	if err != nil {
 		return "analysis_error", err
 	}
