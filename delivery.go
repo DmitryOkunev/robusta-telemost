@@ -28,6 +28,7 @@ type state struct {
 	PublishedMillis int64          `json:",omitempty"`
 }
 type service struct {
+	holmes                           *holmesWorker
 	summary                          summarySettings
 	zone                             *time.Location
 	projectLabels                    map[string]string
@@ -174,5 +175,11 @@ func (s *service) deliver(ctx context.Context, chat, route string, f finding, re
 	updated := current
 	updated.PublishedMillis = 0
 	updated.Phase = next
-	return s.swap(ctx, key, current, updated)
+	if err := s.swap(ctx, key, current, updated); err != nil {
+		return err
+	}
+	if next == "open" && !resolved {
+		s.queueInvestigation(key, chat, route, current.Parent, f, received)
+	}
+	return nil
 }
