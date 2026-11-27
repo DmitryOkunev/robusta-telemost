@@ -11,9 +11,11 @@ import (
 type finding struct {
 	Title, Description, Severity, Fingerprint, Source string
 	StartsAt                                          time.Time `json:"starts_at"`
+	EndsAt                                            time.Time `json:"ends_at"`
 	Subject                                           struct {
-		Namespace string
-		Labels    map[string]string
+		Annotations map[string]string
+		Namespace   string
+		Labels      map[string]string
 	}
 	Links       []struct{ Name, URL string }
 	Enrichments []struct {
@@ -86,7 +88,10 @@ func (f finding) message(resolved bool, labels map[string]string) string {
 			}
 		}
 	}
-	text := []rune(robustaLink.ReplaceAllString(strings.Join(lines, "\n"), "[$2]($1)"))
+	return limitMessage(robustaLink.ReplaceAllString(strings.Join(lines, "\n"), "[$2]($1)"))
+}
+func limitMessage(s string) string {
+	text := []rune(s)
 	if len(text) > 4096 {
 		return string(text[:4095]) + "…"
 	}

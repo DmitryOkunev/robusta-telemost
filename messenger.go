@@ -36,7 +36,9 @@ type botResponse struct {
 	Images    []galleryImage `json:"images"`
 }
 
-func (b bot) call(ctx context.Context, method, contentType string, body io.Reader) (botResponse, error) {
+func (b bot) call(ctx context.Context, method, contentType string, body io.Reader) (_ botResponse, callErr error) {
+	resultClass := "transport_error"
+	defer func() { apiCalls.WithLabelValues(method, resultClass).Inc() }()
 	req, err := http.NewRequestWithContext(ctx, "POST", b.base+"/bot/v1/messages/"+method+"/", body)
 	if err != nil {
 		return botResponse{}, err
@@ -48,6 +50,12 @@ func (b bot) call(ctx context.Context, method, contentType string, body io.Reade
 		return botResponse{}, err
 	}
 	defer resp.Body.Close()
+	resultClass = strconv.Itoa(resp.StatusCode/100) + "xx"
+	defer func() {
+		if callErr != nil && resp.StatusCode == http.StatusOK {
+			resultClass = "invalid_response"
+		}
+	}()
 	var result botResponse
 	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 408 && err == nil && result.OK != nil && !*result.OK {
