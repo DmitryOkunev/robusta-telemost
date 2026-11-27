@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -22,6 +23,7 @@ const maxBody = 4 << 20
 func handler(s *service, routes map[string]string, token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/findings/{route}", func(w http.ResponseWriter, r *http.Request) {
+		received := time.Now()
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "unauthorized", 401)
 			return
@@ -47,7 +49,7 @@ func handler(s *service, routes map[string]string, token string) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 		defer cancel()
-		if err := s.deliver(ctx, chat, f); err != nil {
+		if err := s.deliver(context.WithValue(ctx, receiptKey{}, received), chat, r.PathValue("route"), f); err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, errConflict) {
 				status = http.StatusConflict
@@ -58,6 +60,7 @@ func handler(s *service, routes map[string]string, token string) http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -113,7 +116,18 @@ func main() {
 		MaxRetries:      -1,
 	})
 	defer db.Close()
-	s := &service{
+	zone, err := time.LoadLocation(setting("INCIDENT_TIMEZONE", "UTC"))
+	if err != nil {
+		log.Fatal("invalid INCIDENT_TIMEZONE")
+	}
+	var summary summarySettings
+	if err := json.Unmarshal([]byte(setting("INCIDENT_METRICS", "{}")), &summary); err != nil {
+		log.Fatal("invalid INCIDENT_METRICS JSON")
+	}
+	if err := summary.validate(routes); err != nil {
+		log.Fatal(err)
+	}
+	s := &service{zone: zone, summary: summary,
 		db:            db,
 		projectLabels: projectLabels,
 		bot: bot{

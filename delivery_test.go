@@ -241,13 +241,13 @@ func TestUncertainAndRejectedPosts(t *testing.T) {
 			f.Fingerprint = fmt.Sprint(time.Now().UnixNano())
 			orphan := f
 			orphan.Title = "[RESOLVED] " + f.Title
-			if err := s.deliver(context.Background(), "chat", orphan); !errors.Is(err, errConflict) {
+			if err := s.deliver(context.Background(), "chat", "dev", orphan); !errors.Is(err, errConflict) {
 				t.Fatalf("orphan: %v", err)
 			}
-			if err := s.deliver(context.Background(), "chat", f); err == nil {
+			if err := s.deliver(context.Background(), "chat", "dev", f); err == nil {
 				t.Fatal("expected bot error")
 			}
-			err := s.deliver(context.Background(), "chat", f)
+			err := s.deliver(context.Background(), "chat", "dev", f)
 			if ambiguous {
 				if !errors.Is(err, errConflict) || attempts.Load() != 1 {
 					t.Fatalf("ambiguous retry: %v, calls %d", err, attempts.Load())

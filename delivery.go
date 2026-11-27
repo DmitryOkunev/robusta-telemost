@@ -25,8 +25,11 @@ type state struct {
 	Parent          int64
 	ResolvedCaption string         `json:",omitempty"`
 	Images          []galleryImage `json:",omitempty"`
+	PublishedMillis int64          `json:",omitempty"`
 }
 type service struct {
+	summary                          summarySettings
+	zone                             *time.Location
 	projectLabels                    map[string]string
 	db                               redis.Cmdable
 	bot                              bot
@@ -65,7 +68,7 @@ func incidentID(chat string, f finding) [32]byte {
 	return sha256.Sum256(data)
 }
 
-func (s *service) deliver(ctx context.Context, chat string, f finding) error {
+func (s *service) deliver(ctx context.Context, chat, route string, f finding) error {
 	digest := incidentID(chat, f)
 	lock := &s.locks[digest[0]]
 	lock.Lock()
@@ -110,12 +113,16 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if resolved {
 			phase, after = "sending_reply", "reply_sent"
 		}
+		var details string
+		if resolved {
+			details = s.resolution(ctx, route, f)
+		}
 		claim := current
 		claim.Phase = phase
 		if err = s.swap(ctx, key, current, claim); err != nil {
 			return err
 		}
-		response, err := s.bot.publish(ctx, chat, f.message(resolved, s.projectLabels), current.Parent, imgs)
+		response, err := s.bot.publish(ctx, chat, withSummary(f.message(resolved, s.projectLabels), details), current.Parent, imgs)
 		if err != nil {
 			var rejected rejection
 			if errors.As(err, &rejected) {
@@ -127,6 +134,11 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		}
 		posted := current
 		posted.Phase = after
+		posted.PublishedMillis = time.Now().UnixMilli()
+		observeDelay("webhook_to_publish", resolved, receipt(ctx))
+		if resolved && posted.ResolvedCaption != "" {
+			posted.ResolvedCaption = withSummary(posted.ResolvedCaption, details)
+		}
 		if !resolved {
 			posted.Parent = response.MessageID
 			posted.Images = response.Images
@@ -143,7 +155,7 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 		if err = s.bot.editParent(ctx, chat, current); err != nil {
 			return err
 		}
-		edited := state{Phase: "parent_edited", Parent: current.Parent}
+		edited := state{Phase: "parent_edited", Parent: current.Parent, PublishedMillis: current.PublishedMillis}
 		if err = s.swap(ctx, key, current, edited); err != nil {
 			return err
 		}
@@ -156,7 +168,11 @@ func (s *service) deliver(ctx context.Context, chat string, f finding) error {
 	if err = s.bot.react(ctx, chat, current.Parent, name); err != nil {
 		return err
 	}
+	if current.PublishedMillis != 0 {
+		observeDelay("publish_to_reaction", next == "closed", time.UnixMilli(current.PublishedMillis))
+	}
 	updated := current
+	updated.PublishedMillis = 0
 	updated.Phase = next
 	return s.swap(ctx, key, current, updated)
 }

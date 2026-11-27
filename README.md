@@ -19,6 +19,18 @@ A Go service for sending enriched Robusta Classic Prometheus alerts to Yandex Te
 | `FIRING_REACTION`, `RESOLVED_REACTION` | Names accepted by the chat, defaulting to `fire` and `like`. Check the chat's available reactions. |
 | `LISTEN_ADDR` | Defaults to `:8080`. Liveness is `GET /healthz` and Valkey readiness is `GET /readyz`. |
 
+Resolved replies and edited parent captions include the start, end and elapsed time reported by Alertmanager. Set `INCIDENT_TIMEZONE` to an IANA zone (default UTC). Missing or invalid end times are displayed as unavailable.
+
+Optional `INCIDENT_METRICS` JSON maps `profiles` to trusted VictoriaMetrics URLs and `signals` to the measured series and its worst direction. For example:
+
+```json
+{"profiles":{"example-dev":{"namespace":"example-dev","cluster":"example","route":"dev","url":"http://vmselect:8481/select/10/prometheus"}},"signals":{"MemoryHigh":{"series":"Memory, %","worst":"max"}}}
+```
+
+The rule's Grafana annotation `dashboard_graph_url` supplies `var-expression`. Its query must return the configured series in the `job` label, tagged with namespace and object labels. An optional `Порог …` series provides the threshold. The service queries the configured tenant at the event end, including both incident boundaries and one-minute samples across the interval. A missing closing sample is shown separately. Lookup failures still allow notification delivery.
+
+Scrape `GET /metrics` for `telemost_delivery_stage_seconds` (stages `webhook_to_publish`, `publish_to_reaction`; events `firing`, `resolved`), `telemost_bot_api_requests_total` (method and result), and `telemost_summary_reads_total`. The reaction timer starts at acknowledgement of the root or thread reply, including subsequent edits and retries. It measures Bot API acknowledgement.
+
 Use a dedicated Valkey user with key pattern `~telemost:*` and commands `+ping +cluster|slots +cluster|shards +get +set +del +eval`. The service uses a single-key compare-and-set Lua script to claim each outbound post. Configure AOF and a persistent volume for state that must survive a Valkey restart. The current client uses plaintext TCP to Valkey inside the trusted network.
 
 ## Delivery behavior
