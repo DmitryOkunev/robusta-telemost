@@ -127,14 +127,18 @@ func main() {
 	if err := json.Unmarshal([]byte(setting("INCIDENT_METRICS", "{}")), &summary); err != nil {
 		log.Fatal("invalid INCIDENT_METRICS JSON")
 	}
-	sources, err := loadSources(os.Getenv("OBSERVABILITY_PROFILES_FILE"), &summary)
+	cfg, err := parseHolmes(setting("HOLMES_CONFIG", "{}"))
+	if err != nil {
+		log.Fatalf("invalid HOLMES_CONFIG: %v", err)
+	}
+	sources, err := loadSources(os.Getenv("OBSERVABILITY_PROFILES_FILE"), cfg.Sources, &summary)
 	if err != nil {
 		log.Fatalf("invalid observability sources: %v", err)
 	}
 	if err := summary.validate(routes); err != nil {
 		log.Fatal(err)
 	}
-	holmes, err := newHolmes(setting("HOLMES_CONFIG", "{}"), summary, sources)
+	holmes, err := newHolmes(cfg, summary, sources)
 	if err != nil {
 		log.Fatalf("invalid HOLMES_CONFIG: %v", err)
 	}

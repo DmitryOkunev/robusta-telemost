@@ -60,23 +60,29 @@ The integration script starts a disposable Valkey Cluster and uses a local HTTP 
 
 ## Optional HolmesGPT thread analysis
 
-After a new firing card and its reaction are confirmed, the service can ask a standalone HolmesGPT `POST /api/chat` for a short analysis and post it in that thread. The model and provider credentials belong to Holmes. Enable the worker with `HOLMES_CONFIG={"enabled":true,"endpoint":"http://holmes","contextLabels":["service","deployment","reason"]}`. Mount a YAML file and set `OBSERVABILITY_PROFILES_FILE` to its full path. Its keys match the alert label `observability_profile`.
+After a new firing card and its reaction are confirmed, the service can ask a standalone HolmesGPT `POST /api/chat` for a short analysis and post it in that thread. The model and provider credentials belong to Holmes. Set `HOLMES_CONFIG` to a YAML block in the delivery service values. List namespaces that share the same route, cluster and data sources together. Each namespace is also the expected value of the alert label `observability_profile`.
 
 ```yaml
-profiles:
-  example-dev:
-    route: dev
-    cluster: sandbox
-    namespace: example-dev
-    metrics:
-      url: https://metrics.example.invalid/select/10/prometheus
-      auth: {bearerTokenEnv: EXAMPLE_METRICS_TOKEN}
-    logs:
-      url: https://logs.example.invalid
-      accountID: "1"
-      projectID: "0"
-      auth: {usernameEnv: EXAMPLE_LOG_USER, passwordEnv: EXAMPLE_LOG_PASSWORD}
+env:
+  HOLMES_CONFIG: |-
+    enabled: true
+    endpoint: http://holmes
+    contextLabels: [service, deployment, reason]
+    sources:
+      - route: dev
+        cluster: sandbox
+        namespaces: [example-dev, another-dev]
+        metrics:
+          url: https://metrics.example.invalid/select/10/prometheus
+          auth: {bearerTokenEnv: EXAMPLE_METRICS_TOKEN}
+        logs:
+          url: https://logs.example.invalid
+          accountID: "1"
+          projectID: "0"
+          auth: {usernameEnv: EXAMPLE_LOG_USER, passwordEnv: EXAMPLE_LOG_PASSWORD}
 ```
+
+For an existing group, add the new namespace to its list. Use a separate group when the route, cluster, sources or credentials differ. JSON configuration and the existing `OBSERVABILITY_PROFILES_FILE` format remain supported, including explicit mappings for profile labels that differ from the namespace.
 
 Both sources support optional Bearer or Basic authentication. Populate the named environment variables from Secret keys. Omit `auth` for an internal endpoint without credentials. The two log IDs can be omitted together for a single-tenant or upstream-authenticated endpoint. Keep signal definitions in `INCIDENT_METRICS.signals`. Existing deployments can continue using their inline profiles for counts and summaries.
 

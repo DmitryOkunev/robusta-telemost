@@ -47,20 +47,39 @@ type projectSource struct {
 	Logs                      logSource
 }
 
-func loadSources(path string, summary *summarySettings) (map[string]projectSource, error) {
-	if path == "" {
-		return nil, nil
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+type sourceGroup struct {
+	Namespaces     []string
+	Cluster, Route string
+	Metrics        metricsSource
+	Logs           logSource
+}
+
+func loadSources(path string, groups []sourceGroup, summary *summarySettings) (map[string]projectSource, error) {
 	var file struct{ Profiles map[string]projectSource }
-	if err := yaml.UnmarshalStrict(b, &file); err != nil {
-		return nil, fmt.Errorf("invalid observability profiles YAML: %w", err)
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := yaml.UnmarshalStrict(b, &file); err != nil {
+			return nil, fmt.Errorf("invalid observability profiles YAML: %w", err)
+		}
+		if len(file.Profiles) == 0 {
+			return nil, fmt.Errorf("observability file has no profiles")
+		}
+	} else {
+		file.Profiles = make(map[string]projectSource)
 	}
-	if len(file.Profiles) == 0 {
-		return nil, fmt.Errorf("observability file has no profiles")
+	for _, group := range groups {
+		if len(group.Namespaces) == 0 {
+			return nil, fmt.Errorf("source group requires namespaces")
+		}
+		for _, ns := range group.Namespaces {
+			if _, exists := file.Profiles[ns]; exists {
+				return nil, fmt.Errorf("duplicate observability profile %q", ns)
+			}
+			file.Profiles[ns] = projectSource{Cluster: group.Cluster, Route: group.Route, Namespace: ns, Metrics: group.Metrics, Logs: group.Logs}
+		}
 	}
 	if summary.Profiles == nil {
 		summary.Profiles = make(map[string]summaryProfile)
