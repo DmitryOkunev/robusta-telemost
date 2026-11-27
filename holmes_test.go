@@ -32,6 +32,12 @@ func TestHolmesThread(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"total":"20","errors":"2","warnings":"1"}`)
 		case "/api/chat":
+			if r.Header.Get("X-Holmes-Namespace") != "sample-dev" {
+				t.Error("missing investigation namespace")
+			}
+			if _, err := time.Parse(time.RFC3339, r.Header.Get("X-Holmes-Observed")); err != nil {
+				t.Error("missing investigation time", err)
+			}
 			close(started)
 			var req struct{ Ask string }
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
