@@ -38,7 +38,7 @@ func TestHolmesThread(t *testing.T) {
 				t.Error(err)
 			}
 			var e incidentEvidence
-			if err := json.Unmarshal([]byte(req.Ask), &e); err != nil || e.Logs == nil || e.Logs.Errors != 2 || len(e.Graphs) != 1 || e.Graphs[0].Max != 1 || strings.Contains(req.Ask, "PRIVATE") {
+			if err := json.Unmarshal([]byte(req.Ask), &e); err != nil || e.Alert != "NewUnconfiguredRule" || e.Description != "CPU is high" || e.Logs == nil || e.Logs.Errors != 2 || len(e.Graphs) != 1 || e.Graphs[0].Max != 1 || strings.Contains(req.Ask, "PRIVATE") {
 				t.Error("unexpected evidence", req.Ask)
 			}
 			<-release
@@ -72,9 +72,10 @@ func TestHolmesThread(t *testing.T) {
 	s := service{holmes: h, summary: cfg, db: db, bot: bot{backend.URL, "x", backend.Client()}}
 	f := sample(t)
 	f.Fingerprint = fmt.Sprint(time.Now().UnixNano())
-	f.Description = "PRIVATE"
+	f.Description = "CPU is high"
+	f.Subject.Annotations = map[string]string{"internal": "PRIVATE"}
 	f.Subject.Namespace = "sample-dev"
-	f.Subject.Labels = map[string]string{"alertname": "CPU", "cluster": "one", "namespace": "sample-dev", "observability_profile": "sample-dev", "pod": "pod1"}
+	f.Subject.Labels = map[string]string{"alertname": "NewUnconfiguredRule", "cluster": "one", "namespace": "sample-dev", "observability_profile": "sample-dev", "pod": "pod1"}
 	f.Enrichments[0].Blocks[0].Graph.Data.Series[0].Metric = map[string]string{"job": "CPU"}
 	s.queueInvestigation("k", "c", "prod", 20, f, time.Now())
 	if len(h.jobs) != 0 {
@@ -102,5 +103,58 @@ func TestHolmesThread(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no analysis")
+	}
+}
+
+func TestAllProfileAlerts(t *testing.T) {
+	cfg := summarySettings{Profiles: map[string]summaryProfile{"demo-dev": {Route: "dev", Cluster: "one", Namespace: "demo-dev"}}}
+	h := &holmesWorker{config: holmesConfig{Profiles: map[string]logSource{"demo-dev": {}}, ContextLabels: []string{"market_id", "source_id", "deployment", "reason", "job"}}, jobs: make(chan investigation, 1)}
+	s := service{holmes: h, summary: cfg}
+	f := sample(t)
+	f.Title = "No quotes"
+	f.Description = "Quotes are missing. See https://example.invalid/private"
+	f.Severity = "HIGH"
+	f.Subject.Namespace = "demo-dev"
+	f.Subject.Labels = map[string]string{"cluster": "one", "namespace": "demo-dev", "observability_profile": "demo-dev", "alertname": "FutureQuoteRule", "market_id": "X_Y", "private_label": "PRIVATE"}
+	f.Enrichments = nil
+	collect := func() incidentEvidence {
+		t.Helper()
+		s.queueInvestigation("key", "chat", "dev", 7, f, time.Now())
+		select {
+		case j := <-h.jobs:
+			return j.evidence
+		default:
+			t.Fatal("expected investigation")
+			return incidentEvidence{}
+		}
+	}
+	e := collect()
+	if e.Alert != "FutureQuoteRule" || e.Title != "No quotes" || e.Description != "Quotes are missing. See [URL]" || e.Severity != "HIGH" || e.Labels["market_id"] != "X_Y" || len(e.Labels) != 1 || len(e.Graphs) != 0 {
+		t.Fatal(e)
+	}
+
+	f.Enrichments = sample(t).Enrichments
+	g := f.Enrichments[0].Blocks[0].Graph
+	signal := g.Data.Series[0]
+	signal.Metric = map[string]string{"market_id": "X_Y", "__name__": "quotes", "job": "oracle", "private_label": "PRIVATE"}
+	foreign := signal
+	foreign.Metric = map[string]string{"market_id": "another"}
+	g.Data.Series = nil
+	g.Data.Series = append(g.Data.Series, foreign)
+	for i := 0; i < 9; i++ {
+		g.Data.Series = append(g.Data.Series, signal)
+	}
+	e = collect()
+	if len(e.Graphs) != 8 || !e.GraphsTruncated || e.Graphs[0].Name != "quotes" || e.Graphs[0].Labels["job"] != "oracle" || e.Graphs[0].Labels["market_id"] != "X_Y" {
+		t.Fatal(e)
+	}
+	payload, _ := json.Marshal(e)
+	if strings.Contains(string(payload), "PRIVATE") {
+		t.Fatal("unexpected label in evidence")
+	}
+	f.Subject.Labels["namespace"] = "demo-prod"
+	s.queueInvestigation("k", "chat", "dev", 7, f, time.Now())
+	if len(h.jobs) != 0 {
+		t.Fatal("mismatched namespace accepted")
 	}
 }
